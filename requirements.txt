@@ -11,10 +11,12 @@ scipy>=1.11.0
 # Plotting
 plotly>=5.17.0
 
-# Broker Integration (Optional)
-# Uncomment if you want to use broker integration
-pyRofex
-pyhomebroker
+# Excel Export
+openpyxl>=3.1.0
+
+# Broker Integration (Optional - Uncomment to use)
+# pyRofex>=1.2.0
+# pyhomebroker>=0.50
 
 # Utilities
 python-dateutil>=2.8.0
