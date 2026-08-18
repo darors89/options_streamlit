@@ -364,17 +364,28 @@ Built with ❤️ in Python | Powered by Streamlit
 
 ## 📊 Mi Portafolio (`portfolio.py`)
 
-App independiente de **estado de situación del portafolio**: posiciones abiertas,
-P&G realizada y no realizada (FIFO, comisiones incluidas en la base de coste,
-mismo criterio que el extracto del bróker), distribución, evolución del valor y
-visión en EUR con efecto divisa.
+App independiente de **estado de situación del portafolio**, con **EUR como
+moneda principal** (conmutable a USD en la barra lateral) y cuatro pestañas:
+
+- **📊 Resumen** — valor actual, EUR aportados, P&G total/realizada/no realizada
+  (FIFO, comisiones incluidas en la base de coste, mismo criterio que el
+  extracto del bróker), posiciones abiertas, distribución y P&G por símbolo.
+- **📈 Rendimiento** — P&G diaria/semanal/mensual neta de compras y ventas,
+  evolución del valor, rentabilidad TWR comparada con un benchmark
+  seleccionable (SPY, QQQ, VT) y tabla de retornos por periodo.
+- **⚠️ Riesgo** — volatilidad anualizada, beta, drawdown máximo, concentración
+  (HHI), y atribución de riesgo (peso vs contribución a la volatilidad) por
+  posición y por sector.
+- **📒 Operaciones** — editor de operaciones (simulación en sesión) y resumen
+  de las conversiones de divisa.
 
 ### Datos
 
 | Archivo | Contenido |
 |---|---|
 | `data/trades.csv` | Operaciones de acciones: `symbol, datetime, quantity, price, fee` (cantidad negativa = venta) |
-| `data/forex.csv` | Conversiones EUR→USD: `datetime, eur_quantity, rate, usd_amount, fee_eur` (opcional; habilita la visión en EUR) |
+| `data/forex.csv` | Conversiones EUR→USD: `datetime, eur_quantity, rate, usd_amount, fee_eur` (opcional; habilita los aportes y P&G en EUR) |
+| `data/sectors.csv` | Sector de cada símbolo: `symbol, sector` (para la atribución de riesgo) |
 
 **Para actualizar el portafolio:** edita `data/trades.csv` directamente en GitHub
 (añade una fila por operación) y guarda el commit — Streamlit Community Cloud
