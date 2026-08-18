@@ -11,6 +11,9 @@ scipy>=1.11.0
 # Plotting
 plotly>=5.17.0
 
+# Market data (portfolio.py)
+yfinance>=0.2.40
+
 # Excel Export
 openpyxl>=3.1.0
 

@@ -359,3 +359,49 @@ streamlit run app.py
 ---
 
 Built with ❤️ in Python | Powered by Streamlit
+
+---
+
+## 📊 Mi Portafolio (`portfolio.py`)
+
+App independiente de **estado de situación del portafolio**: posiciones abiertas,
+P&G realizada y no realizada (FIFO, comisiones incluidas en la base de coste,
+mismo criterio que el extracto del bróker), distribución, evolución del valor y
+visión en EUR con efecto divisa.
+
+### Datos
+
+| Archivo | Contenido |
+|---|---|
+| `data/trades.csv` | Operaciones de acciones: `symbol, datetime, quantity, price, fee` (cantidad negativa = venta) |
+| `data/forex.csv` | Conversiones EUR→USD: `datetime, eur_quantity, rate, usd_amount, fee_eur` (opcional; habilita la visión en EUR) |
+
+**Para actualizar el portafolio:** edita `data/trades.csv` directamente en GitHub
+(añade una fila por operación) y guarda el commit — Streamlit Community Cloud
+redespliega la app automáticamente. También puedes subir un CSV desde la barra
+lateral para una consulta puntual, o editar las operaciones dentro de la app
+(solo dura la sesión).
+
+Ejemplo de fila en `data/trades.csv`:
+
+```csv
+AAPL,2026-07-30 09:30:02,1,332.62,1.00
+```
+
+### Ejecutar en local
+
+```bash
+pip install -r requirements.txt
+streamlit run portfolio.py
+```
+
+### Publicar en Streamlit Community Cloud (gratis)
+
+1. Entra en [share.streamlit.io](https://share.streamlit.io) con tu cuenta de GitHub.
+2. **Create app → Deploy a public app from GitHub**.
+3. Repositorio: `darors89/options_streamlit`, rama y **Main file path: `portfolio.py`**.
+4. Deploy. La URL resultante (p. ej. `https://<nombre>.streamlit.app`) queda
+   publicada y se actualiza sola con cada commit.
+
+Los precios se obtienen de Yahoo Finance (yfinance) con ~15 min de retraso y
+caché de 10 minutos; el botón «Actualizar precios» fuerza el refresco.
