@@ -44,6 +44,7 @@ BASE_DIR = Path(__file__).parent
 TRADES_CSV = BASE_DIR / "data" / "trades.csv"
 FOREX_CSV = BASE_DIR / "data" / "forex.csv"
 SECTORS_CSV = BASE_DIR / "data" / "sectors.csv"
+DEPOSITS_CSV = BASE_DIR / "data" / "deposits.csv"
 
 TRADE_COLUMNS = {"symbol", "datetime", "quantity", "price", "fee"}
 
@@ -79,6 +80,56 @@ def load_forex() -> pd.DataFrame | None:
     fx = pd.read_csv(FOREX_CSV)
     fx["datetime"] = pd.to_datetime(fx["datetime"])
     return fx
+
+
+def load_deposits() -> pd.DataFrame | None:
+    """Aportes (+) y retiros (−) de la cuenta, en EUR."""
+    if not DEPOSITS_CSV.exists():
+        return None
+    deposits = pd.read_csv(DEPOSITS_CSV).dropna(subset=["date", "amount_eur"])
+    deposits["date"] = pd.to_datetime(deposits["date"])
+    deposits["amount_eur"] = pd.to_numeric(deposits["amount_eur"])
+    return deposits.sort_values("date").reset_index(drop=True)
+
+
+def cum_on(idx: pd.DatetimeIndex, when, amounts) -> pd.Series:
+    """Suma acumulada de importes fechados, alineada al índice diario."""
+    if when is None or len(when) == 0:
+        return pd.Series(0.0, index=idx)
+    events = (
+        pd.Series(
+            np.asarray(amounts, dtype=float),
+            index=pd.DatetimeIndex(pd.to_datetime(when)).normalize(),
+        )
+        .sort_index()
+        .groupby(level=0)
+        .sum()
+        .cumsum()
+    )
+    return events.reindex(idx.union(events.index)).ffill().reindex(idx).fillna(0.0)
+
+
+def xirr(dates: list[pd.Timestamp], amounts: list[float]) -> float | None:
+    """TIR anualizada (convención XIRR) por bisección; None si no converge."""
+    if len(dates) < 2:
+        return None
+    t0 = min(dates)
+    years = np.array([(d - t0).days / 365.0 for d in dates])
+    cashflows = np.array(amounts, dtype=float)
+
+    def npv(rate: float) -> float:
+        return float((cashflows / (1 + rate) ** years).sum())
+
+    lo, hi = -0.95, 10.0
+    if npv(lo) * npv(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if npv(lo) * npv(mid) <= 0:
+            hi = mid
+        else:
+            lo = mid
+    return (lo + hi) / 2
 
 
 def load_sectors() -> dict[str, str]:
@@ -513,14 +564,52 @@ if forex is not None and not forex.empty:
     trade_cashflow = (-(trades["quantity"] * trades["price"]) - trades["fee"]).sum()
     cash_usd = usd_received + trade_cashflow
 
+# Aportes y retiros de la cuenta → efectivo EUR restante, valor total y TIR
+deposits = load_deposits()
+net_deposits = eur_cash = account_value_eur = mwr = None
+deposits_in = withdrawals = 0.0
+if deposits is not None and not deposits.empty:
+    deposits_in = deposits.loc[deposits["amount_eur"] > 0, "amount_eur"].sum()
+    withdrawals = -deposits.loc[deposits["amount_eur"] < 0, "amount_eur"].sum()
+    net_deposits = deposits["amount_eur"].sum()
+    eur_cash = net_deposits
+    if forex is not None and not forex.empty:
+        # eur_quantity negativo = EUR convertidos a USD; comisiones en EUR
+        eur_cash = (
+            net_deposits
+            + forex["eur_quantity"].sum()
+            - forex["fee_eur"].abs().sum()
+        )
+    account_value_eur = eur_cash + (cash_usd + total_value) / eurusd
+    if net_deposits > 0:
+        flow_dates = list(deposits["date"]) + [pd.Timestamp.today().normalize()]
+        flow_amounts = list(-deposits["amount_eur"]) + [account_value_eur]
+        mwr = xirr(flow_dates, flow_amounts)
+
+# Vista de la cuenta en la moneda principal (compartida por las pestañas)
+account_value_main = deposits_main = cash_main = invested_share = None
+if account_value_eur is not None and net_deposits:
+    if currency == "EUR":
+        account_value_main = account_value_eur
+        deposits_main = net_deposits
+        cash_main = eur_cash + cash_usd / eurusd
+    else:
+        account_value_main = eur_cash * eurusd + cash_usd + total_value
+        deposits_main = net_deposits * eurusd
+        cash_main = eur_cash * eurusd + cash_usd
+    invested_share = (
+        to_main(total_value) / account_value_main * 100 if account_value_main else 0.0
+    )
+
 # Histórico (posiciones + benchmark + EUR/USD) para rendimiento y riesgo
 benchmark = BENCHMARKS[benchmark_name]
 history = pd.DataFrame()
 if HAS_YF and len(trades):
     all_symbols = tuple(sorted(set(trades["symbol"]))) + (benchmark, "EURUSD=X")
-    history = fetch_history(
-        all_symbols, trades["datetime"].min().strftime("%Y-%m-%d")
-    )
+    history_start = trades["datetime"].min()
+    if deposits is not None and not deposits.empty:
+        history_start = min(history_start, deposits["date"].min())
+    history = fetch_history(all_symbols, history_start.strftime("%Y-%m-%d"))
 
 values_main = flows_main = fx_hist = None
 bench_hist = None
@@ -543,14 +632,94 @@ if not history.empty:
         values_main = values_usd
         flows_main = flows_usd
 
+# Series diarias de la cuenta completa (posiciones + efectivo USD + efectivo
+# EUR) y de los aportes acumulados, en la moneda principal
+account_series = deposits_series = None
+if (
+    values_main is not None
+    and deposits is not None
+    and not deposits.empty
+):
+    idx = history.index
+    deposits_cum_eur = cum_on(idx, deposits["date"], deposits["amount_eur"])
+    eur_cash_cum = deposits_cum_eur.copy()
+    usd_cash_cum = cum_on(
+        idx,
+        trades["datetime"],
+        -(trades["quantity"] * trades["price"]) - trades["fee"],
+    )
+    if forex is not None and not forex.empty:
+        eur_cash_cum = eur_cash_cum + cum_on(
+            idx, forex["datetime"], forex["eur_quantity"]
+        ) - cum_on(idx, forex["datetime"], forex["fee_eur"].abs())
+        usd_cash_cum = usd_cash_cum + cum_on(
+            idx, forex["datetime"], forex["usd_amount"]
+        )
+    if currency == "EUR":
+        account_series = eur_cash_cum + (usd_cash_cum + values_usd) / fx_hist
+        deposits_series = deposits_cum_eur
+    else:
+        account_series = eur_cash_cum * fx_hist + usd_cash_cum + values_usd
+        deposits_series = deposits_cum_eur * fx_hist
+
 tab_resumen, tab_rendimiento, tab_riesgo, tab_operaciones = st.tabs(
     ["📊 Resumen", "📈 Rendimiento", "⚠️ Riesgo", "📒 Operaciones"]
 )
 
 # ================================================================ RESUMEN
 with tab_resumen:
-    k1, k2, k3, k4, k5 = st.columns(5)
-    if currency == "EUR" and eur_contributed:
+    if account_value_main is not None:
+        pnl_account = account_value_main - deposits_main
+        total_fees_main = to_main(total_fees) + (
+            (fx_fees if currency == "EUR" else fx_fees * eurusd) if fx_fees else 0.0
+        )
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric(
+            "Valor total de la cuenta",
+            f"{account_value_main:,.2f} {SYM}",
+            help=f"Posiciones {total_value:,.2f} $ + efectivo USD "
+            f"{cash_usd:,.2f} $ + efectivo EUR {eur_cash:,.2f} €, "
+            f"al tipo {eurusd:.4f}.",
+        )
+        k2.metric(
+            "Aportes netos",
+            f"{deposits_main:,.2f} {SYM}",
+            help=f"Transferido: {deposits_in:,.2f} € · retirado: "
+            f"{withdrawals:,.2f} €.",
+        )
+        k3.metric(
+            "P&G total",
+            f"{pnl_account:+,.2f} {SYM}",
+            delta=f"{pnl_account / deposits_main * 100:+.2f}%",
+            help="Valor total de la cuenta − aportes netos. Incluye el efecto "
+            "del tipo de cambio y todas las comisiones.",
+        )
+        k4.metric(
+            "Efectivo disponible",
+            f"{cash_main:,.2f} {SYM}",
+            help=f"{eur_cash:,.2f} € sin convertir + {cash_usd:,.2f} $ en USD. "
+            f"Invertido: {invested_share:.1f}% de la cuenta.",
+        )
+
+        k5, k6, k7, k8 = st.columns(4)
+        k5.metric("P&G no realizada", fmt(total_unrealized, signed=True))
+        k6.metric("P&G realizada", fmt(total_realized, signed=True))
+        k7.metric(
+            "TIR anualizada",
+            f"{mwr:+.2%}" if mwr is not None else "—",
+            help="Rentabilidad ponderada por dinero (XIRR sobre tus aportes y "
+            "el valor actual): tu rentabilidad real, teniendo en cuenta "
+            "cuándo aportaste y el efectivo sin invertir.",
+        )
+        k8.metric(
+            "Comisiones totales",
+            f"{total_fees_main:,.2f} {SYM}",
+            help=f"Operativa: {total_fees:,.2f} $ · cambio de divisa: "
+            f"{fx_fees:,.2f} €." if fx_fees else None,
+        )
+    elif currency == "EUR" and eur_contributed:
+        k1, k2, k3, k4, k5 = st.columns(5)
         eur_value_now = (total_value + cash_usd) / eurusd
         eur_pnl = eur_value_now - eur_contributed
         k1.metric(
@@ -575,6 +744,7 @@ with tab_resumen:
         k4.metric("P&G no realizada", fmt(total_unrealized, signed=True))
         k5.metric("P&G realizada", fmt(total_realized, signed=True))
     else:
+        k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Valor de mercado", fmt(total_value))
         k2.metric("Coste posiciones abiertas", fmt(total_cost))
         k3.metric(
@@ -730,8 +900,44 @@ with tab_rendimiento:
         )
         st.plotly_chart(pnl_bars(pnl_series, SYM), use_container_width=True)
 
-        st.subheader("Evolución del valor de las posiciones")
-        st.plotly_chart(line_chart(values_main, SYM), use_container_width=True)
+        if account_series is not None:
+            st.subheader("Valor de la cuenta vs aportes acumulados")
+            st.caption(
+                "La distancia entre las dos líneas es la P&G acumulada "
+                "(posiciones + efectivo, comisiones y divisa incluidas)."
+            )
+            fig = go.Figure()
+            fig.add_scatter(
+                x=account_series.index,
+                y=account_series.values,
+                mode="lines",
+                name="Valor de la cuenta",
+                line=dict(color=BLUE, width=2),
+                hovertemplate="%{x|%d %b %Y}: %{y:,.2f} "
+                + SYM
+                + "<extra>Valor de la cuenta</extra>",
+            )
+            fig.add_scatter(
+                x=deposits_series.index,
+                y=deposits_series.values,
+                mode="lines",
+                name="Aportes netos",
+                line=dict(color=ORANGE, width=2, shape="hv"),
+                hovertemplate="%{x|%d %b %Y}: %{y:,.2f} "
+                + SYM
+                + "<extra>Aportes netos</extra>",
+            )
+            style_figure(fig, height=320)
+            fig.update_layout(
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            )
+            fig.update_yaxes(tickformat=",.0f")
+            fig.update_xaxes(showgrid=False)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.subheader("Evolución del valor de las posiciones")
+            st.plotly_chart(line_chart(values_main, SYM), use_container_width=True)
 
         st.subheader(f"Rentabilidad vs {benchmark_name}")
         st.caption(
@@ -793,6 +999,35 @@ with tab_rendimiento:
             row[benchmark_name] = f"{value:+.2%}" if value is not None else "—"
             rows.append(row)
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+        if mwr is not None:
+            twr_total = period_return(twr, twr.index[0])
+            st.subheader("TWR vs TIR")
+            st.caption(
+                "El **TWR** mide cómo se comportaron tus inversiones "
+                "(comparable con el benchmark). La **TIR** mide lo que ganaste "
+                "tú realmente: pondera por cuánto dinero tenías puesto en cada "
+                "momento e incluye el efectivo sin invertir."
+            )
+            t1, t2, t3 = st.columns(3)
+            t1.metric(
+                "TWR (total)",
+                f"{twr_total:+.2%}" if twr_total is not None else "—",
+                help="Rentabilidad de las posiciones desde la primera "
+                "operación, sin efecto del momento de los aportes.",
+            )
+            t2.metric(
+                "TIR anualizada",
+                f"{mwr:+.2%}",
+                help="XIRR sobre tus aportes reales y el valor actual de la "
+                "cuenta, efectivo incluido.",
+            )
+            t3.metric(
+                "Capital invertido",
+                f"{invested_share:.1f}%" if invested_share is not None else "—",
+                help="Porcentaje de la cuenta que está en posiciones. El resto "
+                "es efectivo, que no renta y arrastra la TIR hacia abajo.",
+            )
 
 # ================================================================= RIESGO
 with tab_riesgo:
@@ -974,6 +1209,44 @@ with tab_operaciones:
             "fee": st.column_config.NumberColumn("Comisión (USD)", format="%.2f"),
         },
     )
+
+    if deposits is not None and not deposits.empty:
+        st.subheader("Aportes y retiros de la cuenta")
+        st.caption(
+            "Transferencias de entrada y salida en EUR. Para actualizarlas, "
+            "edita `data/deposits.csv` en GitHub (importe negativo = retiro)."
+        )
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Transferido", f"{deposits_in:,.2f} €")
+        d2.metric("Retirado", f"{withdrawals:,.2f} €")
+        d3.metric("Aportes netos", f"{net_deposits:,.2f} €")
+        d4.metric(
+            "Efectivo EUR restante",
+            f"{eur_cash:,.2f} €",
+            help="Aportes netos − EUR convertidos a USD − comisiones de cambio.",
+        )
+        st.dataframe(
+            deposits.assign(
+                acumulado=deposits["amount_eur"].cumsum()
+            ),
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "date": st.column_config.DateColumn("Fecha", format="YYYY-MM-DD"),
+                "amount_eur": st.column_config.NumberColumn(
+                    "Importe €", format="%.2f"
+                ),
+                "description": st.column_config.TextColumn("Descripción"),
+                "acumulado": st.column_config.NumberColumn(
+                    "Acumulado €", format="%.2f"
+                ),
+            },
+        )
+    else:
+        st.caption(
+            "Añade data/deposits.csv con tus transferencias (`date, amount_eur, "
+            "description`) para ver el efectivo EUR restante y la TIR."
+        )
 
     if forex is not None and not forex.empty:
         st.subheader("Conversiones de divisa (EUR→USD)")

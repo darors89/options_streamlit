@@ -367,12 +367,15 @@ Built with ❤️ in Python | Powered by Streamlit
 App independiente de **estado de situación del portafolio**, con **EUR como
 moneda principal** (conmutable a USD en la barra lateral) y cuatro pestañas:
 
-- **📊 Resumen** — valor actual, EUR aportados, P&G total/realizada/no realizada
-  (FIFO, comisiones incluidas en la base de coste, mismo criterio que el
-  extracto del bróker), posiciones abiertas, distribución y P&G por símbolo.
+- **📊 Resumen** — valor total de la cuenta (posiciones + efectivo EUR y USD),
+  aportes netos, P&G total, efectivo disponible, TIR anualizada, comisiones y
+  P&G realizada/no realizada (FIFO, comisiones incluidas en la base de coste,
+  mismo criterio que el extracto del bróker), posiciones abiertas,
+  distribución y P&G por símbolo.
 - **📈 Rendimiento** — P&G diaria/semanal/mensual neta de compras y ventas,
-  evolución del valor, rentabilidad TWR comparada con un benchmark
-  seleccionable (SPY, QQQ, VT) y tabla de retornos por periodo.
+  valor de la cuenta vs aportes acumulados, rentabilidad TWR comparada con un
+  benchmark seleccionable (SPY, QQQ, VT), tabla de retornos por periodo y
+  comparación TWR vs TIR con el porcentaje de capital invertido.
 - **⚠️ Riesgo** — volatilidad anualizada, beta, drawdown máximo, concentración
   (HHI), y atribución de riesgo (peso vs contribución a la volatilidad) por
   posición y por sector.
@@ -385,7 +388,23 @@ moneda principal** (conmutable a USD en la barra lateral) y cuatro pestañas:
 |---|---|
 | `data/trades.csv` | Operaciones de acciones: `symbol, datetime, quantity, price, fee` (cantidad negativa = venta) |
 | `data/forex.csv` | Conversiones EUR→USD: `datetime, eur_quantity, rate, usd_amount, fee_eur` (opcional; habilita los aportes y P&G en EUR) |
+| `data/deposits.csv` | Transferencias de la cuenta: `date, amount_eur, description` (importe negativo = retiro; habilita el efectivo EUR restante y la TIR) |
 | `data/sectors.csv` | Sector de cada símbolo: `symbol, sector` (para la atribución de riesgo) |
+
+### Cómo encajan los datos
+
+```
+aportes netos (deposits.csv)
+  − EUR convertidos y comisiones de cambio (forex.csv)   = efectivo EUR restante
+  + USD obtenidos − compras + ventas (trades.csv)        = efectivo USD
+  + valor de mercado de las posiciones                   = valor total de la cuenta
+```
+
+La **P&G total** es el valor total de la cuenta menos los aportes netos, así que
+incluye comisiones, efecto divisa y el efectivo sin invertir. La **TIR** (XIRR)
+usa las fechas reales de tus transferencias, de modo que refleja tu rentabilidad
+real; el **TWR** ignora el momento de los aportes y es el comparable con el
+benchmark.
 
 **Para actualizar el portafolio:** edita `data/trades.csv` directamente en GitHub
 (añade una fila por operación) y guarda el commit — Streamlit Community Cloud
