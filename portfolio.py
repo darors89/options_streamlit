@@ -1416,6 +1416,20 @@ with tab_operaciones:
         )
 
 st.divider()
+loaded = [f"{len(trades)} operaciones"]
+loaded.append(
+    f"{len(deposits)} aportes" if deposits is not None and not deposits.empty
+    else "sin aportes (falta data/deposits.csv)"
+)
+loaded.append(
+    f"{len(dividends)} dividendos" if dividends is not None and not dividends.empty
+    else "sin dividendos (falta data/dividends.csv)"
+)
+loaded.append(
+    f"{len(forex)} conversiones" if forex is not None and not forex.empty
+    else "sin conversiones (falta data/forex.csv)"
+)
+st.caption("Datos cargados: " + " · ".join(loaded) + ".")
 st.caption(
     "Los precios pueden llevar ~15 min de retraso. Este panel es informativo, "
     "no asesoramiento financiero."
