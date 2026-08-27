@@ -372,6 +372,8 @@ moneda principal** (conmutable a USD en la barra lateral) y cuatro pestañas:
   P&G realizada/no realizada (FIFO, comisiones incluidas en la base de coste,
   mismo criterio que el extracto del bróker), posiciones abiertas,
   distribución y P&G por símbolo.
+- **💰 Dividendos** — cobrado neto, bruto, retención en origen y yield sobre
+  coste, con dividendos por símbolo, acumulado en el tiempo y detalle de cobros.
 - **📈 Rendimiento** — P&G diaria/semanal/mensual neta de compras y ventas,
   valor de la cuenta vs aportes acumulados, rentabilidad TWR comparada con un
   benchmark seleccionable (SPY, QQQ, VT), tabla de retornos por periodo y
@@ -389,6 +391,7 @@ moneda principal** (conmutable a USD en la barra lateral) y cuatro pestañas:
 | `data/trades.csv` | Operaciones de acciones: `symbol, datetime, quantity, price, fee` (cantidad negativa = venta) |
 | `data/forex.csv` | Conversiones EUR→USD: `datetime, eur_quantity, rate, usd_amount, fee_eur` (opcional; habilita los aportes y P&G en EUR) |
 | `data/deposits.csv` | Transferencias de la cuenta: `date, amount_eur, description` (importe negativo = retiro; habilita el efectivo EUR restante y la TIR) |
+| `data/dividends.csv` | Dividendos cobrados: `date, symbol, amount_usd, tax_usd, description` (importe bruto y retención en origen) |
 | `data/sectors.csv` | Sector de cada símbolo: `symbol, sector` (para la atribución de riesgo) |
 
 ### Cómo encajan los datos
@@ -396,12 +399,13 @@ moneda principal** (conmutable a USD en la barra lateral) y cuatro pestañas:
 ```
 aportes netos (deposits.csv)
   − EUR convertidos y comisiones de cambio (forex.csv)   = efectivo EUR restante
-  + USD obtenidos − compras + ventas (trades.csv)        = efectivo USD
+  + USD obtenidos − compras + ventas (trades.csv)
+  + dividendos netos (dividends.csv)                     = efectivo USD
   + valor de mercado de las posiciones                   = valor total de la cuenta
 ```
 
 La **P&G total** es el valor total de la cuenta menos los aportes netos, así que
-incluye comisiones, efecto divisa y el efectivo sin invertir. La **TIR** (XIRR)
+incluye dividendos, comisiones, efecto divisa y el efectivo sin invertir. La **TIR** (XIRR)
 usa las fechas reales de tus transferencias, de modo que refleja tu rentabilidad
 real; el **TWR** ignora el momento de los aportes y es el comparable con el
 benchmark.

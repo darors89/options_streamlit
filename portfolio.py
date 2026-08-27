@@ -6,8 +6,8 @@ comisiones incluidas en la base de coste, igual que el extracto del bróker — 
 valora las posiciones a precio de mercado vía yfinance.
 
 Moneda principal: EUR (configurable a USD en la barra lateral). Pestañas:
-Resumen, Rendimiento (P&G diaria y comparación con benchmark), Riesgo
-(atribución por sector, volatilidad, drawdown) y Operaciones.
+Resumen, Rendimiento (P&G diaria y comparación con benchmark), Dividendos,
+Riesgo (atribución por sector, volatilidad, drawdown) y Operaciones.
 
 Para actualizar los datos: editar data/trades.csv en GitHub (un commit
 redespliega la app en Streamlit Community Cloud), o subir un CSV desde la
@@ -45,6 +45,7 @@ TRADES_CSV = BASE_DIR / "data" / "trades.csv"
 FOREX_CSV = BASE_DIR / "data" / "forex.csv"
 SECTORS_CSV = BASE_DIR / "data" / "sectors.csv"
 DEPOSITS_CSV = BASE_DIR / "data" / "deposits.csv"
+DIVIDENDS_CSV = BASE_DIR / "data" / "dividends.csv"
 
 TRADE_COLUMNS = {"symbol", "datetime", "quantity", "price", "fee"}
 
@@ -90,6 +91,19 @@ def load_deposits() -> pd.DataFrame | None:
     deposits["date"] = pd.to_datetime(deposits["date"])
     deposits["amount_eur"] = pd.to_numeric(deposits["amount_eur"])
     return deposits.sort_values("date").reset_index(drop=True)
+
+
+def load_dividends() -> pd.DataFrame | None:
+    """Dividendos cobrados en USD: importe bruto y retención en origen."""
+    if not DIVIDENDS_CSV.exists():
+        return None
+    div = pd.read_csv(DIVIDENDS_CSV).dropna(subset=["date", "amount_usd"])
+    div["date"] = pd.to_datetime(div["date"])
+    div["symbol"] = div["symbol"].astype(str).str.strip().str.upper()
+    div["amount_usd"] = pd.to_numeric(div["amount_usd"])
+    div["tax_usd"] = pd.to_numeric(div.get("tax_usd", 0)).fillna(0.0).abs()
+    div["net_usd"] = div["amount_usd"] - div["tax_usd"]
+    return div.sort_values("date").reset_index(drop=True)
 
 
 def cum_on(idx: pd.DatetimeIndex, when, amounts) -> pd.Series:
@@ -564,6 +578,15 @@ if forex is not None and not forex.empty:
     trade_cashflow = (-(trades["quantity"] * trades["price"]) - trades["fee"]).sum()
     cash_usd = usd_received + trade_cashflow
 
+# Dividendos cobrados (el neto entra como efectivo en USD)
+dividends = load_dividends()
+div_gross = div_tax = div_net = 0.0
+if dividends is not None and not dividends.empty:
+    div_gross = dividends["amount_usd"].sum()
+    div_tax = dividends["tax_usd"].sum()
+    div_net = dividends["net_usd"].sum()
+    cash_usd += div_net
+
 # Aportes y retiros de la cuenta → efectivo EUR restante, valor total y TIR
 deposits = load_deposits()
 net_deposits = eur_cash = account_value_eur = mwr = None
@@ -648,6 +671,10 @@ if (
         trades["datetime"],
         -(trades["quantity"] * trades["price"]) - trades["fee"],
     )
+    if dividends is not None and not dividends.empty:
+        usd_cash_cum = usd_cash_cum + cum_on(
+            idx, dividends["date"], dividends["net_usd"]
+        )
     if forex is not None and not forex.empty:
         eur_cash_cum = eur_cash_cum + cum_on(
             idx, forex["datetime"], forex["eur_quantity"]
@@ -662,8 +689,14 @@ if (
         account_series = eur_cash_cum * fx_hist + usd_cash_cum + values_usd
         deposits_series = deposits_cum_eur * fx_hist
 
-tab_resumen, tab_rendimiento, tab_riesgo, tab_operaciones = st.tabs(
-    ["📊 Resumen", "📈 Rendimiento", "⚠️ Riesgo", "📒 Operaciones"]
+(
+    tab_resumen,
+    tab_rendimiento,
+    tab_dividendos,
+    tab_riesgo,
+    tab_operaciones,
+) = st.tabs(
+    ["📊 Resumen", "📈 Rendimiento", "💰 Dividendos", "⚠️ Riesgo", "📒 Operaciones"]
 )
 
 # ================================================================ RESUMEN
@@ -692,8 +725,9 @@ with tab_resumen:
             "P&G total",
             f"{pnl_account:+,.2f} {SYM}",
             delta=f"{pnl_account / deposits_main * 100:+.2f}%",
-            help="Valor total de la cuenta − aportes netos. Incluye el efecto "
-            "del tipo de cambio y todas las comisiones.",
+            help="Valor total de la cuenta − aportes netos. Incluye "
+            "dividendos, efecto del tipo de cambio y todas las comisiones "
+            f"({total_fees_main:,.2f} {SYM}).",
         )
         k4.metric(
             "Efectivo disponible",
@@ -713,10 +747,12 @@ with tab_resumen:
             "cuándo aportaste y el efectivo sin invertir.",
         )
         k8.metric(
-            "Comisiones totales",
-            f"{total_fees_main:,.2f} {SYM}",
-            help=f"Operativa: {total_fees:,.2f} $ · cambio de divisa: "
-            f"{fx_fees:,.2f} €." if fx_fees else None,
+            "Dividendos cobrados",
+            f"{to_main(div_net):,.2f} {SYM}" if div_net else "—",
+            help=f"Neto tras retención. Bruto: {div_gross:,.2f} $ · "
+            f"retención en origen: {div_tax:,.2f} $."
+            if div_net
+            else "Añade data/dividends.csv para verlos.",
         )
     elif currency == "EUR" and eur_contributed:
         k1, k2, k3, k4, k5 = st.columns(5)
@@ -863,6 +899,13 @@ with tab_rendimiento:
     else:
         daily_pnl = values_main.diff() - flows_main
         daily_pnl.iloc[0] = values_main.iloc[0] - flows_main.iloc[0]
+        if dividends is not None and not dividends.empty:
+            div_daily = cum_on(
+                daily_pnl.index, dividends["date"], dividends["net_usd"]
+            ).diff().fillna(0.0)
+            if currency == "EUR" and fx_hist is not None:
+                div_daily = div_daily / fx_hist
+            daily_pnl = daily_pnl + div_daily
 
         twr = twr_index(values_main, flows_main)
         last_day = daily_pnl.index[-1]
@@ -1028,6 +1071,111 @@ with tab_rendimiento:
                 help="Porcentaje de la cuenta que está en posiciones. El resto "
                 "es efectivo, que no renta y arrastra la TIR hacia abajo.",
             )
+
+# ============================================================= DIVIDENDOS
+with tab_dividendos:
+    if dividends is None or dividends.empty:
+        st.info(
+            "Añade `data/dividends.csv` con columnas `date, symbol, amount_usd, "
+            "tax_usd, description` para ver los dividendos cobrados."
+        )
+    else:
+        first_div = dividends["date"].min()
+        months = max(
+            (pd.Timestamp.today().normalize() - first_div).days / 365.25 * 12, 1.0
+        )
+        annualized = div_net / months * 12
+        yield_on_cost = annualized / total_cost * 100 if total_cost else 0.0
+
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric(
+            "Cobrado (neto)",
+            f"{to_main(div_net):,.2f} {SYM}",
+            help="Lo que realmente entró en la cuenta, tras la retención.",
+        )
+        d2.metric("Bruto", f"{to_main(div_gross):,.2f} {SYM}")
+        d3.metric(
+            "Retención en origen",
+            f"{to_main(div_tax):,.2f} {SYM}",
+            help="Impuesto retenido en EE. UU. Con el formulario W-8BEN "
+            "presentado suele ser el 15%; parte es recuperable en la "
+            "declaración española.",
+        )
+        d4.metric(
+            "Yield sobre coste",
+            f"{yield_on_cost:.2f}%",
+            help=f"Dividendo neto anualizado ({to_main(annualized):,.2f} {SYM}) "
+            "sobre el coste de las posiciones abiertas. Estimado a partir del "
+            "histórico cobrado, no de los dividendos futuros anunciados.",
+        )
+
+        by_symbol = (
+            dividends.groupby("symbol")[["amount_usd", "tax_usd", "net_usd"]]
+            .sum()
+            .sort_values("net_usd")
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Dividendos por símbolo")
+            st.caption("Importe neto cobrado desde el inicio.")
+            st.plotly_chart(
+                hbar_chart(
+                    pd.Series(by_symbol.index),
+                    by_symbol["net_usd"].map(to_main),
+                    [f"{to_main(v):,.2f} {SYM}" for v in by_symbol["net_usd"]],
+                    BLUE,
+                ),
+                use_container_width=True,
+            )
+        with c2:
+            st.subheader("Dividendos acumulados")
+            st.caption("Cada escalón es un cobro.")
+            cum = dividends.set_index("date")["net_usd"].cumsum().map(to_main)
+            fig = go.Figure(
+                go.Scatter(
+                    x=cum.index,
+                    y=cum.values,
+                    mode="lines+markers",
+                    line=dict(color=BLUE, width=2, shape="hv"),
+                    marker=dict(size=8, color=BLUE),
+                    hovertemplate="%{x|%d %b %Y}: %{y:,.2f} "
+                    + SYM
+                    + "<extra></extra>",
+                )
+            )
+            style_figure(fig, height=max(220, 40 * len(by_symbol) + 60))
+            fig.update_xaxes(showgrid=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Detalle de cobros")
+        st.caption(
+            "Para actualizarlos, edita `data/dividends.csv` en GitHub. "
+            "El neto se suma al efectivo en USD de la cuenta."
+        )
+        detail = dividends.assign(
+            gross_main=dividends["amount_usd"].map(to_main),
+            tax_main=dividends["tax_usd"].map(to_main),
+            net_main=dividends["net_usd"].map(to_main),
+        )[["date", "symbol", "gross_main", "tax_main", "net_main", "description"]]
+        st.dataframe(
+            detail,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "date": st.column_config.DateColumn("Fecha", format="YYYY-MM-DD"),
+                "symbol": st.column_config.TextColumn("Símbolo"),
+                "gross_main": st.column_config.NumberColumn(
+                    f"Bruto {SYM}", format="%.2f"
+                ),
+                "tax_main": st.column_config.NumberColumn(
+                    f"Retención {SYM}", format="%.2f"
+                ),
+                "net_main": st.column_config.NumberColumn(
+                    f"Neto {SYM}", format="%.2f"
+                ),
+                "description": st.column_config.TextColumn("Descripción"),
+            },
+        )
 
 # ================================================================= RIESGO
 with tab_riesgo:
