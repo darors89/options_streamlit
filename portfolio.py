@@ -689,6 +689,31 @@ if (
         account_series = eur_cash_cum * fx_hist + usd_cash_cum + values_usd
         deposits_series = deposits_cum_eur * fx_hist
 
+# P&G diaria (compartida por Resumen y Rendimiento). El % usa como base el
+# valor de las posiciones al cierre anterior más los movimientos del día,
+# igual que el encadenado del TWR.
+daily_pnl = daily_ret = None
+today_pnl = today_pnl_pct = last_session = None
+if values_main is not None and len(values_main) >= 1:
+    daily_pnl = values_main.diff() - flows_main
+    daily_pnl.iloc[0] = values_main.iloc[0] - flows_main.iloc[0]
+    if dividends is not None and not dividends.empty:
+        div_daily = (
+            cum_on(daily_pnl.index, dividends["date"], dividends["net_usd"])
+            .diff()
+            .fillna(0.0)
+        )
+        if currency == "EUR" and fx_hist is not None:
+            div_daily = div_daily / fx_hist
+        daily_pnl = daily_pnl + div_daily
+    base_value = values_main.shift(1).fillna(0.0) + flows_main
+    daily_ret = (daily_pnl / base_value).where(base_value > 1e-9)
+    last_session = daily_pnl.index[-1]
+    today_pnl = float(daily_pnl.iloc[-1])
+    today_pnl_pct = (
+        float(daily_ret.iloc[-1]) if pd.notna(daily_ret.iloc[-1]) else None
+    )
+
 (
     tab_resumen,
     tab_rendimiento,
@@ -867,6 +892,37 @@ with tab_resumen:
                 use_container_width=True,
             )
 
+            is_today = (
+                last_session is not None
+                and last_session.date() == dt.date.today()
+            )
+            label = "hoy" if is_today else "última sesión"
+            session_note = (
+                f"Sesión del {last_session:%d %b %Y}."
+                if last_session is not None
+                else ""
+            )
+            t1, t2 = st.columns(2)
+            t1.metric(
+                f"P&G de {label}",
+                f"{today_pnl:+,.2f} {SYM}" if today_pnl is not None else "—",
+                help="Variación del valor de las posiciones en la última "
+                "sesión, neta de compras y ventas y con los dividendos "
+                f"cobrados ese día. {session_note}",
+            )
+            t2.metric(
+                f"P&G de {label} (%)",
+                f"{today_pnl_pct:+.2%}"
+                if today_pnl_pct is not None
+                else "—",
+                help="Sobre el valor de las posiciones al cierre anterior "
+                f"(más los movimientos del día). {session_note}",
+            )
+            if last_session is not None and not is_today:
+                st.caption(
+                    f"⏱️ Último cierre disponible: {last_session:%d %b %Y}."
+                )
+
     closed = summary[summary["realized"].abs() > 1e-9]
     if not closed.empty:
         st.subheader("P&G realizada por símbolo")
@@ -891,22 +947,12 @@ with tab_resumen:
 
 # ============================================================ RENDIMIENTO
 with tab_rendimiento:
-    if values_main is None or len(values_main) < 2:
+    if values_main is None or len(values_main) < 2 or daily_pnl is None:
         st.info(
             "El análisis de rendimiento necesita el histórico de precios "
             "(Yahoo Finance). Vuelve a intentarlo con «Actualizar precios»."
         )
     else:
-        daily_pnl = values_main.diff() - flows_main
-        daily_pnl.iloc[0] = values_main.iloc[0] - flows_main.iloc[0]
-        if dividends is not None and not dividends.empty:
-            div_daily = cum_on(
-                daily_pnl.index, dividends["date"], dividends["net_usd"]
-            ).diff().fillna(0.0)
-            if currency == "EUR" and fx_hist is not None:
-                div_daily = div_daily / fx_hist
-            daily_pnl = daily_pnl + div_daily
-
         twr = twr_index(values_main, flows_main)
         last_day = daily_pnl.index[-1]
 
@@ -1416,6 +1462,20 @@ with tab_operaciones:
         )
 
 st.divider()
+loaded = [f"{len(trades)} operaciones"]
+loaded.append(
+    f"{len(deposits)} aportes" if deposits is not None and not deposits.empty
+    else "sin aportes (falta data/deposits.csv)"
+)
+loaded.append(
+    f"{len(dividends)} dividendos" if dividends is not None and not dividends.empty
+    else "sin dividendos (falta data/dividends.csv)"
+)
+loaded.append(
+    f"{len(forex)} conversiones" if forex is not None and not forex.empty
+    else "sin conversiones (falta data/forex.csv)"
+)
+st.caption("Datos cargados: " + " · ".join(loaded) + ".")
 st.caption(
     "Los precios pueden llevar ~15 min de retraso. Este panel es informativo, "
     "no asesoramiento financiero."
