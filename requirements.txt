@@ -1,25 +1,30 @@
 # requirements.txt - Python Dependencies
+#
+# Versiones fijadas a las verificadas en Python 3.11 (sep. 2026): con rangos
+# abiertos, una release nueva de cualquier paquete puede tumbar el despliegue
+# sin tocar el código. Para actualizar: sube una versión, prueba la app y haz
+# commit del nuevo pin.
 
 # Core
-streamlit>=1.28.0
-pandas>=2.0.0
-numpy>=1.24.0
+streamlit==1.61.1
+pandas==3.0.5
+numpy==2.4.6
 
-# Calculations
-scipy>=1.11.0
+# Calculations (app.py / blackscholes.py)
+scipy==1.17.1
 
 # Plotting
-plotly>=5.17.0
+plotly==6.9.0
 
 # Market data (portfolio.py)
-yfinance>=0.2.40
+yfinance==1.6.0
 
-# Excel Export
-openpyxl>=3.1.0
+# Excel Export (qol_features.py)
+openpyxl==3.1.5
 
 # Broker Integration (Optional - Uncomment to use)
 # pyRofex>=1.2.0
 # pyhomebroker>=0.50
 
 # Utilities
-python-dateutil>=2.8.0
+python-dateutil==2.9.0.post0
