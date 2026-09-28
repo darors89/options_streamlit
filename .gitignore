@@ -1,0 +1,16 @@
+# Bytecode de Python
+__pycache__/
+*.py[cod]
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Sistema operativo / editores
+.DS_Store
+.idea/
+.vscode/

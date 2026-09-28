@@ -422,6 +422,55 @@ Ejemplo de fila en `data/trades.csv`:
 AAPL,2026-07-30 09:30:02,1,332.62,1.00
 ```
 
+### Conectar con Interactive Brokers (opcional)
+
+La app puede leer las operaciones directamente de IBKR mediante el **Flex Web
+Service**, en lugar de los CSV. Es la única vía de IBKR que funciona en
+Streamlit Cloud: usa un token de solo lectura, sin gateway ni login
+interactivo. Los datos son de cierre del día anterior, no intradía; los
+precios en vivo siguen viniendo de Yahoo Finance.
+
+**1. Crear la Flex Query** (Performance & Reports → Flex Queries → Activity
+Flex Query → nueva):
+
+| Sección | Qué marcar |
+|---|---|
+| Trades | `symbol`, `dateTime`, `quantity`, `tradePrice`, `ibCommission`, `assetCategory`, `proceeds`, `buySell` — y en tipos de activo, **acciones y divisas (Forex)** |
+| Cash Transactions | `symbol`, `dateTime`, `amount`, `type`, `description` — con los tipos **Dividends**, **Withholding Tax** y **Deposits/Withdrawals** |
+
+Formato **XML**, y periodo el más amplio que necesites. Al guardar, apunta el
+**Query ID**.
+
+**2. Generar el token**: Settings → Account Settings → Flex Web Service →
+activar y generar. Caduca (hasta un año); anótalo, solo se muestra una vez.
+
+**3. Configurar los secrets.** En Streamlit Cloud, *Manage app → Settings →
+Secrets*; en local, `.streamlit/secrets.toml` (ignorado por git):
+
+```toml
+[ibkr]
+token = "tu-token-de-flex"
+query_id = "123456"
+```
+
+Con eso aparece la opción **IBKR (Flex Query)** en la barra lateral. El
+informe se cachea una hora, porque IBKR limita la frecuencia de descarga de
+una misma consulta.
+
+**Límites a tener en cuenta:**
+
+- Una Flex Query cubre **como máximo 365 días**. Cuando tu histórico supere
+  el año, las operaciones antiguas tendrán que quedarse en los CSV.
+- Los nombres de los campos dependen de lo que marques al definir la
+  consulta. Si falta alguna sección, la app lo dice explícitamente en un
+  aviso en lugar de fallar.
+- Si la descarga falla (token caducado, IBKR caído), la app avisa y sigue
+  funcionando con los CSV del repositorio.
+
+> ⚠️ Antes de conectar IBKR, restringe el acceso a la app. En Streamlit
+> Community Cloud las apps son públicas por defecto, y con esto pasa a ser un
+> espejo automático de tu cuenta real: en *Share* limita quién puede verla.
+
 ### Ejecutar en local
 
 ```bash
