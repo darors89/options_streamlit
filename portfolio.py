@@ -24,6 +24,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import ibkr
+
 try:
     import yfinance as yf
 
@@ -210,6 +212,28 @@ def fifo_summary(trades: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
             }
         )
     return pd.DataFrame(rows), warnings
+
+
+def ibkr_credentials() -> tuple[str, str] | None:
+    """Token y consulta de IBKR desde los secrets, o None si no están.
+
+    st.secrets lanza excepción si no hay fichero de secrets, así que la app
+    tiene que funcionar igual cuando no se ha configurado nada.
+    """
+    try:
+        config = st.secrets["ibkr"]
+        token, query_id = config.get("token"), config.get("query_id")
+    except Exception:
+        return None
+    return (token, query_id) if token and query_id else None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_ibkr(token: str, query_id: str) -> tuple[str, dict]:
+    """Descarga el informe de IBKR. Cacheado 1 h: el Flex Web Service limita
+    la frecuencia con la que se puede pedir la misma consulta."""
+    xml = ibkr.fetch_flex_xml(token, query_id)
+    return xml, ibkr.parse_flex_xml(xml)
 
 
 # ---------------------------------------------------------------- precios
@@ -450,11 +474,18 @@ with st.sidebar:
     benchmark_name = st.selectbox("Benchmark", list(BENCHMARKS))
     st.divider()
     st.header("Datos")
+    credenciales = ibkr_credentials()
+    has_ibkr = credenciales is not None
+    fuentes = ["CSV del repositorio", "Subir CSV"]
+    if has_ibkr:
+        fuentes.insert(0, "IBKR (Flex Query)")
     source = st.radio(
         "Fuente de operaciones",
-        ["CSV del repositorio", "Subir CSV"],
+        fuentes,
         help="El CSV del repositorio es data/trades.csv. Para actualizarlo de "
-        "forma permanente, edítalo en GitHub y haz commit.",
+        "forma permanente, edítalo en GitHub y haz commit."
+        + ("" if has_ibkr else " Para leer de IBKR, configura el token en los "
+           "secrets (ver README)."),
     )
     uploaded = None
     if source == "Subir CSV":
@@ -479,9 +510,36 @@ def fmt(value_usd: float, signed: bool = False) -> str:
     return template.format(to_main(value_usd), SYM)
 
 
+# Descarga desde IBKR: sustituye los cuatro conjuntos de datos a la vez
+ibkr_data: dict | None = None
+ibkr_period = ""
+if source == "IBKR (Flex Query)":
+    try:
+        with st.spinner("Descargando el informe de IBKR…"):
+            ibkr_xml, ibkr_data = fetch_ibkr(*credenciales)
+        ibkr_period = ibkr.statement_period(ibkr_xml)
+        faltan = ibkr.missing_sections(ibkr_data)
+        if faltan:
+            st.warning(
+                "El informe de IBKR no trae: "
+                + ", ".join(faltan)
+                + ". Añade esas secciones al editar la Flex Query."
+            )
+    except ibkr.FlexError as exc:
+        st.error(f"No se pudo leer IBKR: {exc}. Se usan los CSV del repositorio.")
+        ibkr_data = None
+    except Exception as exc:  # red caída, timeout…
+        st.error(
+            f"Fallo al conectar con IBKR ({type(exc).__name__}). "
+            "Se usan los CSV del repositorio."
+        )
+        ibkr_data = None
+
 # Cargar operaciones
 try:
-    if uploaded is not None:
+    if ibkr_data is not None and not ibkr_data["trades"].empty:
+        base_trades = parse_trades(ibkr_data["trades"])
+    elif uploaded is not None:
         base_trades = parse_trades(pd.read_csv(uploaded))
     elif TRADES_CSV.exists():
         base_trades = parse_trades(pd.read_csv(TRADES_CSV))
@@ -566,7 +624,7 @@ total_fees = summary["fees"].sum()
 total_pnl = total_unrealized + total_realized
 
 # Fórex y efectivo estimado
-forex = load_forex()
+forex = ibkr_data["forex"] if ibkr_data else load_forex()
 eur_contributed = fx_fees = avg_rate = None
 cash_usd = 0.0
 if forex is not None and not forex.empty:
@@ -579,7 +637,7 @@ if forex is not None and not forex.empty:
     cash_usd = usd_received + trade_cashflow
 
 # Dividendos cobrados (el neto entra como efectivo en USD)
-dividends = load_dividends()
+dividends = ibkr_data["dividends"] if ibkr_data else load_dividends()
 div_gross = div_tax = div_net = 0.0
 if dividends is not None and not dividends.empty:
     div_gross = dividends["amount_usd"].sum()
@@ -588,7 +646,7 @@ if dividends is not None and not dividends.empty:
     cash_usd += div_net
 
 # Aportes y retiros de la cuenta → efectivo EUR restante, valor total y TIR
-deposits = load_deposits()
+deposits = ibkr_data["deposits"] if ibkr_data else load_deposits()
 net_deposits = eur_cash = account_value_eur = mwr = None
 deposits_in = withdrawals = 0.0
 if deposits is not None and not deposits.empty:
@@ -1475,7 +1533,10 @@ loaded.append(
     f"{len(forex)} conversiones" if forex is not None and not forex.empty
     else "sin conversiones (falta data/forex.csv)"
 )
-st.caption("Datos cargados: " + " · ".join(loaded) + ".")
+origen = (
+    f"IBKR Flex Query ({ibkr_period})" if ibkr_data else f"{source}"
+)
+st.caption(f"Origen: {origen}. Datos cargados: " + " · ".join(loaded) + ".")
 st.caption(
     "Los precios pueden llevar ~15 min de retraso. Este panel es informativo, "
     "no asesoramiento financiero."
